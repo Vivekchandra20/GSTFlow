@@ -1,0 +1,5 @@
+# Reproducibility
+# The delivered CSVs are fixed test fixtures. This script placeholder documents
+# the deterministic seed used for the original generation: NumPy seed 3818,
+# Python random seed 3818. For modifications, preserve the synthetic-only labels
+# and update manifest row counts/version.

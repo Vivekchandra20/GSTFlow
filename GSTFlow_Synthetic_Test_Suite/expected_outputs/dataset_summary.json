@@ -1,0 +1,8 @@
+{
+  "b2b_rows": 5000,
+  "b2c_rows": 10000,
+  "stock_transfer_rows": 1000,
+  "credit_note_rows": 2000,
+  "invalid_rows": 500,
+  "total_rows": 18500
+}

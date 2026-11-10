@@ -1,0 +1,791 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ==========================================
+// ENUMS
+// ==========================================
+
+enum RecipientType {
+  B2B
+  B2C
+  UNKNOWN
+}
+
+enum SupplyType {
+  INTRASTATE
+  INTERSTATE
+  UNKNOWN
+}
+
+enum RecordType {
+  OUTWARD_SUPPLY
+  CREDIT_NOTE
+  STOCK_TRANSFER
+  CANCELLED_ORDER
+  MALFORMED
+}
+
+enum PrimaryOutcome {
+  VALID
+  WARNING
+  REVIEW
+  ERROR
+}
+
+enum StockTransferClassification {
+  DISTINCT_PERSON_SUPPLY
+  RELATED_PERSON_SUPPLY
+  INTER_COMPANY_SUPPLY
+  REVIEW_REQUIRED
+  UNKNOWN
+}
+
+enum ReconciliationStatus {
+  MATCHED_FULL
+  MATCHED_PARTIAL
+  UNMATCHED_ORPHAN
+  AMBIGUOUS_MATCH
+  VALUE_EXCEEDED
+  JURISDICTION_MISMATCH
+}
+
+enum IssueSeverity {
+  ERROR
+  WARNING
+  REVIEW
+}
+
+enum BatchStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum FileBatchStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum OutboxStatus {
+  PENDING
+  CLAIMED
+  PUBLISHED
+  FAILED
+}
+
+enum JobStatus {
+  QUEUED
+  PROCESSING
+  RETRYING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum ExecutionCheckpoint {
+  STAGING
+  DOMAIN_PROCESSING
+  CANONICAL_PERSISTENCE
+  CREDIT_NOTE_RECONCILIATION
+  COMPLETED
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum OrganizationStatus {
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum MembershipStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum BatchExecutionMode {
+  INGESTION
+  REPROCESSING
+}
+
+enum GstRegistrationStatus {
+  ACTIVE
+  CANCELLED
+  SUSPENDED
+  INACTIVE
+}
+
+enum GstRegistrationType {
+  REGULAR
+  COMPOSITION
+  ISD
+  CASUAL
+  NON_RESIDENT
+  TCS_ECO
+  TDS
+  OIDAR
+}
+
+enum SourcePlatform {
+  AMAZON
+  FLIPKART
+  MEESHO
+  CUSTOM
+}
+
+// ==========================================
+// TENANCY & REGISTRATION MODELS
+// ==========================================
+
+model Organization {
+  id                   String            @id @default(uuid()) @db.Uuid
+  name                 String            @db.VarChar(200)
+  slug                 String            @unique @db.VarChar(255)
+  pan                  String?           @db.VarChar(10)
+  status               OrganizationStatus @default(ACTIVE)
+  dataRetentionMonths  Int               @default(72) @map("data_retention_months")
+  createdAt            DateTime          @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt            DateTime          @updatedAt @map("updated_at") @db.Timestamptz
+
+  memberships          OrganizationMembership[]
+  invitations          OrganizationInvitation[]
+  registrations        GstRegistration[]
+  sourceFiles          SourceFile[]
+  sourceRecords        SourceRecord[]
+  importBatches        ImportBatch[]
+  batchSourceFiles     BatchSourceFile[]
+  canonicalInvoices    CanonicalInvoice[]
+  canonicalCreditNotes CanonicalCreditNote[]
+  canonicalTransfers   CanonicalStockTransfer[]
+  invoiceResults       InvoiceProcessingResult[]
+  invoiceLines         InvoiceLine[]
+  creditNoteResults    CreditNoteProcessingResult[]
+  transferResults      StockTransferProcessingResult[]
+  reconciliations      Reconciliation[]
+  validationIssues     ValidationIssue[]
+  metrics              ProcessingMetrics[]
+  outboxEvents         OutboxEvent[]
+  processingJobs       ProcessingJob[]
+
+  @@index([status], name: "idx_organizations_status")
+  @@map("organizations")
+}
+
+model GstRegistration {
+  id               String                @id @default(uuid()) @db.Uuid
+  organizationId   String                @map("organization_id") @db.Uuid
+  gstin            String                @db.VarChar(15)
+  legalName        String                @map("legal_name") @db.VarChar(255)
+  tradeName        String?               @map("trade_name") @db.VarChar(255)
+  stateCode        String                @map("state_code") @db.VarChar(2)
+  pan              String                @db.VarChar(10)
+  registrationType GstRegistrationType   @default(REGULAR) @map("registration_type")
+  status           GstRegistrationStatus @default(ACTIVE) @map("status")
+  isActive         Boolean               @default(true) @map("is_active")
+  effectiveDate    DateTime?             @map("effective_date") @db.Date
+  cancellationDate DateTime?             @map("cancellation_date") @db.Date
+  createdAt        DateTime              @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime              @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization     Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, gstin])
+  @@index([organizationId, status], name: "idx_gst_registrations_org_status")
+  @@index([pan])
+  @@index([stateCode])
+  @@map("gst_registrations")
+}
+
+// ==========================================
+// INGESTION & PROVENANCE MODELS
+// ==========================================
+
+model SourceFile {
+  id                 String            @id @default(uuid()) @db.Uuid
+  organizationId     String            @map("organization_id") @db.Uuid
+  fileName           String            @map("file_name") @db.VarChar(255)
+  fileFingerprint    String            @map("file_fingerprint") @db.VarChar(64)
+  fileSizeBytes      BigInt            @map("file_size_bytes")
+  storageUri         String            @map("storage_uri") @db.VarChar(500)
+  reportPeriod       String?           @map("report_period") @db.VarChar(20)
+  sourceReportType   String            @map("source_report_type") @db.VarChar(50)
+  totalPhysicalLines Int               @default(0) @map("total_physical_lines")
+  uploadedAt         DateTime          @default(now()) @map("uploaded_at") @db.Timestamptz
+
+  organization       Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  records            SourceRecord[]
+  batchAssociations  BatchSourceFile[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, fileFingerprint])
+  @@map("source_files")
+}
+
+model ImportBatch {
+  id                     String              @id @default(uuid()) @db.Uuid
+  organizationId         String              @map("organization_id") @db.Uuid
+  batchNumber            String              @map("batch_number") @db.VarChar(50)
+  engineVersion          String              @map("engine_version") @db.VarChar(30)
+  rulesVersion           String              @map("rules_version") @db.VarChar(30)
+  status                 BatchStatus         @default(PENDING)
+  executionMode          String              @default("STANDARD") @map("execution_mode") @db.VarChar(20)
+  reprocessReason        String?             @map("reprocess_reason") @db.Text
+  parentBatchId          String?             @map("parent_batch_id") @db.Uuid
+  startedAt              DateTime            @default(now()) @map("started_at") @db.Timestamptz
+  completedAt            DateTime?           @map("completed_at") @db.Timestamptz
+  totalRecordsProcessed  Int                 @default(0) @map("total_records_processed")
+  configuration          Json                @default("{}")
+
+  organization           Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  parentBatch            ImportBatch?        @relation("BatchHierarchy", fields: [parentBatchId], references: [id], onDelete: SetNull)
+  childBatches           ImportBatch[]       @relation("BatchHierarchy")
+  fileAssociations       BatchSourceFile[]
+  invoiceResults         InvoiceProcessingResult[]
+  creditNoteResults      CreditNoteProcessingResult[]
+  transferResults        StockTransferProcessingResult[]
+  reconciliations        Reconciliation[]
+  issues                 ValidationIssue[]
+  metrics                ProcessingMetrics?
+  processingJobs         ProcessingJob[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, batchNumber])
+  @@index([organizationId, status])
+  @@map("import_batches")
+}
+
+model BatchSourceFile {
+  id             String          @id @default(uuid()) @db.Uuid
+  organizationId String          @map("organization_id") @db.Uuid
+  importBatchId  String          @map("import_batch_id") @db.Uuid
+  sourceFileId   String          @map("source_file_id") @db.Uuid
+  fileStatus     FileBatchStatus @default(QUEUED) @map("file_status")
+  processedLines Int             @default(0) @map("processed_lines")
+  errorSummary   String?         @map("error_summary") @db.Text
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  importBatch    ImportBatch     @relation(fields: [organizationId, importBatchId], references: [organizationId, id], onDelete: Cascade)
+  sourceFile     SourceFile      @relation(fields: [organizationId, sourceFileId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([importBatchId, sourceFileId])
+  @@map("batch_source_files")
+}
+
+model SourceRecord {
+  id                  String            @id @default(uuid()) @db.Uuid
+  organizationId      String            @map("organization_id") @db.Uuid
+  sourceFileId        String            @map("source_file_id") @db.Uuid
+  physicalLineNumber  Int               @map("physical_line_number")
+  logicalRecordNumber Int               @map("logical_record_number")
+  recordType          RecordType        @map("record_type")
+  rawPayload          Json              @map("raw_payload")
+  createdAt           DateTime          @default(now()) @map("created_at") @db.Timestamptz
+
+  organization        Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  sourceFile          SourceFile        @relation(fields: [organizationId, sourceFileId], references: [organizationId, id], onDelete: Cascade)
+  invoiceResults      InvoiceProcessingResult[]
+  creditNoteResults   CreditNoteProcessingResult[]
+  transferResults     StockTransferProcessingResult[]
+  invoiceLines        InvoiceLine[]
+  issues              ValidationIssue[]
+
+  @@unique([organizationId, id])
+  @@unique([sourceFileId, physicalLineNumber])
+  @@index([organizationId, recordType])
+  @@map("source_records")
+}
+
+// ==========================================
+// CANONICAL FINANCIAL DOCUMENTS (MASTER IDENTITY)
+// ==========================================
+
+model CanonicalInvoice {
+  id                        String          @id @default(uuid()) @db.Uuid
+  organizationId            String          @map("organization_id") @db.Uuid
+  sellerGstin               String          @map("seller_gstin") @db.VarChar(15)
+  financialYear             String          @map("financial_year") @db.VarChar(9)
+  invoiceNumber             String          @map("invoice_number") @db.VarChar(50)
+  invoiceDate               DateTime        @map("invoice_date") @db.Date
+  orderId                   String          @map("order_id") @db.VarChar(100)
+  recipientType             RecipientType   @map("recipient_type")
+  customerGstin             String?         @map("customer_gstin") @db.VarChar(15)
+  shipFromStateCode         String          @map("ship_from_state_code") @db.VarChar(2)
+  placeOfSupplyStateCode    String          @map("place_of_supply_state_code") @db.VarChar(2)
+  supplyType                SupplyType      @map("supply_type")
+  currency                  String          @default("INR") @db.VarChar(3)
+  hasLegalHold              Boolean         @default(false) @map("has_legal_hold")
+  legalProceedingReference  String?         @map("legal_proceeding_reference") @db.VarChar(255)
+  createdAt                 DateTime        @default(now()) @map("created_at") @db.Timestamptz
+
+  organization              Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  processingResults         InvoiceProcessingResult[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, sellerGstin, financialYear, invoiceNumber])
+  @@index([sellerGstin, invoiceNumber, financialYear])
+  @@map("canonical_invoices")
+}
+
+model CanonicalCreditNote {
+  id                        String          @id @default(uuid()) @db.Uuid
+  organizationId            String          @map("organization_id") @db.Uuid
+  sellerGstin               String          @map("seller_gstin") @db.VarChar(15)
+  financialYear             String          @map("financial_year") @db.VarChar(9)
+  creditNoteNumber          String          @map("credit_note_number") @db.VarChar(50)
+  creditNoteDate            DateTime        @map("credit_note_date") @db.Date
+  originalInvoiceNumber     String?         @map("original_invoice_number") @db.VarChar(50)
+  originalInvoiceDate       DateTime?       @map("original_invoice_date") @db.Date
+  orderId                   String?         @map("order_id") @db.VarChar(100)
+  recipientType             RecipientType   @map("recipient_type")
+  customerGstin             String?         @map("customer_gstin") @db.VarChar(15)
+  placeOfSupplyStateCode    String?         @map("place_of_supply_state_code") @db.VarChar(2)
+  hasLegalHold              Boolean         @default(false) @map("has_legal_hold")
+  createdAt                 DateTime        @default(now()) @map("created_at") @db.Timestamptz
+
+  organization              Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  processingResults         CreditNoteProcessingResult[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, sellerGstin, financialYear, creditNoteNumber])
+  @@index([sellerGstin, originalInvoiceNumber])
+  @@map("canonical_credit_notes")
+}
+
+model CanonicalStockTransfer {
+  id                     String         @id @default(uuid()) @db.Uuid
+  organizationId         String         @map("organization_id") @db.Uuid
+  sourceGstin            String         @map("source_gstin") @db.VarChar(15)
+  financialYear          String         @map("financial_year") @db.VarChar(9)
+  transferInvoiceNumber  String         @map("transfer_invoice_number") @db.VarChar(50)
+  transferDate           DateTime       @map("transfer_date") @db.Date
+  destinationGstin       String         @map("destination_gstin") @db.VarChar(15)
+  sourcePan              String         @map("source_pan") @db.VarChar(10)
+  destinationPan         String         @map("destination_pan") @db.VarChar(10)
+  shipFromStateCode      String         @map("ship_from_state_code") @db.VarChar(2)
+  shipToStateCode        String         @map("ship_to_state_code") @db.VarChar(2)
+  hasLegalHold           Boolean        @default(false) @map("has_legal_hold")
+  createdAt              DateTime       @default(now()) @map("created_at") @db.Timestamptz
+
+  organization           Organization   @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  processingResults      StockTransferProcessingResult[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, sourceGstin, financialYear, transferInvoiceNumber])
+  @@map("canonical_stock_transfers")
+}
+
+// ==========================================
+// EXECUTION PROCESSING RESULTS (VERSIONED CALCULATIONS)
+// ==========================================
+
+model InvoiceProcessingResult {
+  id                        String              @id @default(uuid()) @db.Uuid
+  organizationId            String              @map("organization_id") @db.Uuid
+  importBatchId             String              @map("import_batch_id") @db.Uuid
+  canonicalInvoiceId        String              @map("canonical_invoice_id") @db.Uuid
+  sourceRecordId            String              @map("source_record_id") @db.Uuid
+
+  totalTaxableValue         Decimal             @map("total_taxable_value") @db.Decimal(14, 2)
+  shippingTaxableValue      Decimal             @default(0.00) @map("shipping_taxable_value") @db.Decimal(14, 2)
+  cgstAmount                Decimal             @default(0.00) @map("cgst_amount") @db.Decimal(14, 2)
+  sgstAmount                Decimal             @default(0.00) @map("sgst_amount") @db.Decimal(14, 2)
+  utgstAmount               Decimal             @default(0.00) @map("utgst_amount") @db.Decimal(14, 2)
+  igstAmount                Decimal             @default(0.00) @map("igst_amount") @db.Decimal(14, 2)
+  cessAmount                Decimal             @default(0.00) @map("cess_amount") @db.Decimal(14, 2)
+  totalInvoiceAmount        Decimal             @map("total_invoice_amount") @db.Decimal(14, 2)
+
+  reportedTcsCgst           Decimal             @default(0.00) @map("reported_tcs_cgst") @db.Decimal(14, 2)
+  reportedTcsSgst           Decimal             @default(0.00) @map("reported_tcs_sgst") @db.Decimal(14, 2)
+  reportedTcsIgst           Decimal             @default(0.00) @map("reported_tcs_igst") @db.Decimal(14, 2)
+  calculatedTcsCgst         Decimal             @default(0.00) @map("calculated_tcs_cgst") @db.Decimal(14, 2)
+  calculatedTcsSgst         Decimal             @default(0.00) @map("calculated_tcs_sgst") @db.Decimal(14, 2)
+  calculatedTcsIgst         Decimal             @default(0.00) @map("calculated_tcs_igst") @db.Decimal(14, 2)
+
+  cumulativeTaxableReversed Decimal             @default(0.00) @map("cumulative_taxable_reversed") @db.Decimal(14, 2)
+  cumulativeCgstReversed    Decimal             @default(0.00) @map("cumulative_cgst_reversed") @db.Decimal(14, 2)
+  cumulativeSgstReversed    Decimal             @default(0.00) @map("cumulative_sgst_reversed") @db.Decimal(14, 2)
+  cumulativeUtgstReversed   Decimal             @default(0.00) @map("cumulative_utgst_reversed") @db.Decimal(14, 2)
+  cumulativeIgstReversed    Decimal             @default(0.00) @map("cumulative_igst_reversed") @db.Decimal(14, 2)
+  cumulativeTotalReversed   Decimal             @default(0.00) @map("cumulative_total_reversed") @db.Decimal(14, 2)
+  reversalCount             Int                 @default(0) @map("reversal_count")
+
+  primaryOutcome            PrimaryOutcome      @map("primary_outcome")
+  version                   Int                 @default(1)
+  createdAt                 DateTime            @default(now()) @map("created_at") @db.Timestamptz
+
+  organization              Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  importBatch               ImportBatch         @relation(fields: [organizationId, importBatchId], references: [organizationId, id], onDelete: Cascade)
+  canonicalInvoice          CanonicalInvoice    @relation(fields: [organizationId, canonicalInvoiceId], references: [organizationId, id], onDelete: Restrict)
+  sourceRecord              SourceRecord        @relation(fields: [organizationId, sourceRecordId], references: [organizationId, id], onDelete: Restrict)
+  lines                     InvoiceLine[]
+  reconciliations           Reconciliation[]
+  matchedCreditNotes        CreditNoteProcessingResult[]
+
+  @@unique([organizationId, id])
+  @@unique([importBatchId, canonicalInvoiceId])
+  @@index([organizationId, primaryOutcome])
+  @@map("invoice_processing_results")
+}
+
+model InvoiceLine {
+  id                   String                  @id @default(uuid()) @db.Uuid
+  organizationId       String                  @map("organization_id") @db.Uuid
+  invoiceResultId      String                  @map("invoice_result_id") @db.Uuid
+  sourceRecordId       String                  @map("source_record_id") @db.Uuid
+  lineNumber           Int                     @map("line_number")
+  sku                  String?                 @db.VarChar(100)
+  asin                 String?                 @db.VarChar(20)
+  hsnSac               String?                 @map("hsn_sac") @db.VarChar(20)
+  productCategory      String?                 @map("product_category") @db.VarChar(100)
+  quantity             Decimal                 @map("quantity") @db.Decimal(12, 3)
+  unitPrice            Decimal?                @map("unit_price") @db.Decimal(14, 4)
+
+  itemTaxableValue     Decimal                 @map("item_taxable_value") @db.Decimal(14, 2)
+  shippingTaxableValue Decimal                 @default(0.00) @map("shipping_taxable_value") @db.Decimal(14, 2)
+  giftWrapTaxableValue Decimal                 @default(0.00) @map("gift_wrap_taxable_value") @db.Decimal(14, 2)
+  itemPromoDiscount    Decimal                 @default(0.00) @map("item_promo_discount") @db.Decimal(14, 2)
+  taxRate              Decimal                 @map("tax_rate") @db.Decimal(6, 4)
+  cgstRate             Decimal                 @default(0.00) @map("cgst_rate") @db.Decimal(6, 4)
+  cgstAmount           Decimal                 @default(0.00) @map("cgst_amount") @db.Decimal(14, 2)
+  sgstRate             Decimal                 @default(0.00) @map("sgst_rate") @db.Decimal(6, 4)
+  sgstAmount           Decimal                 @default(0.00) @map("sgst_amount") @db.Decimal(14, 2)
+  utgstRate            Decimal                 @default(0.00) @map("utgst_rate") @db.Decimal(6, 4)
+  utgstAmount          Decimal                 @default(0.00) @map("utgst_amount") @db.Decimal(14, 2)
+  igstRate             Decimal                 @default(0.00) @map("igst_rate") @db.Decimal(6, 4)
+  igstAmount           Decimal                 @default(0.00) @map("igst_amount") @db.Decimal(14, 2)
+  cessAmount           Decimal                 @default(0.00) @map("cess_amount") @db.Decimal(14, 2)
+  totalLineAmount      Decimal                 @map("total_line_amount") @db.Decimal(14, 2)
+
+  amazonMetadata       Json?                   @map("amazon_metadata")
+  createdAt            DateTime                @default(now()) @map("created_at") @db.Timestamptz
+
+  organization         Organization            @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  invoiceResult        InvoiceProcessingResult @relation(fields: [organizationId, invoiceResultId], references: [organizationId, id], onDelete: Cascade)
+  sourceRecord         SourceRecord            @relation(fields: [organizationId, sourceRecordId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([invoiceResultId, lineNumber])
+  @@index([sku])
+  @@map("invoice_lines")
+}
+
+model CreditNoteProcessingResult {
+  id                     String               @id @default(uuid()) @db.Uuid
+  organizationId         String               @map("organization_id") @db.Uuid
+  importBatchId          String               @map("import_batch_id") @db.Uuid
+  canonicalCreditNoteId  String               @map("canonical_credit_note_id") @db.Uuid
+  sourceRecordId         String               @map("source_record_id") @db.Uuid
+  matchedInvoiceResultId String?              @map("matched_invoice_result_id") @db.Uuid
+
+  taxableValueReversal   Decimal              @map("taxable_value_reversal") @db.Decimal(14, 2)
+  cgstAmountReversal     Decimal              @default(0.00) @map("cgst_amount_reversal") @db.Decimal(14, 2)
+  sgstAmountReversal     Decimal              @default(0.00) @map("sgst_amount_reversal") @db.Decimal(14, 2)
+  utgstAmountReversal    Decimal              @default(0.00) @map("utgst_amount_reversal") @db.Decimal(14, 2)
+  igstAmountReversal     Decimal              @default(0.00) @map("igst_amount_reversal") @db.Decimal(14, 2)
+  creditNoteTotal        Decimal              @map("credit_note_total") @db.Decimal(14, 2)
+
+  rawSignedAmountText    String               @map("raw_signed_amount_text") @db.VarChar(50)
+  signedAmount           Decimal              @map("signed_amount") @db.Decimal(14, 2)
+
+  reconciliationStatus   ReconciliationStatus @default(UNMATCHED_ORPHAN) @map("reconciliation_status")
+  primaryOutcome         PrimaryOutcome       @map("primary_outcome")
+  createdAt              DateTime             @default(now()) @map("created_at") @db.Timestamptz
+
+  organization           Organization         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  importBatch            ImportBatch          @relation(fields: [organizationId, importBatchId], references: [organizationId, id], onDelete: Cascade)
+  canonicalCreditNote    CanonicalCreditNote  @relation(fields: [organizationId, canonicalCreditNoteId], references: [organizationId, id], onDelete: Restrict)
+  sourceRecord           SourceRecord         @relation(fields: [organizationId, sourceRecordId], references: [organizationId, id], onDelete: Restrict)
+  matchedInvoiceResult   InvoiceProcessingResult? @relation(fields: [organizationId, matchedInvoiceResultId], references: [organizationId, id], onDelete: Restrict)
+  reconciliation         Reconciliation?
+
+  @@unique([organizationId, id])
+  @@unique([importBatchId, canonicalCreditNoteId])
+  @@index([organizationId, reconciliationStatus])
+  @@map("credit_note_processing_results")
+}
+
+model StockTransferProcessingResult {
+  id                  String                      @id @default(uuid()) @db.Uuid
+  organizationId      String                      @map("organization_id") @db.Uuid
+  importBatchId       String                      @map("import_batch_id") @db.Uuid
+  canonicalTransferId String                      @map("canonical_transfer_id") @db.Uuid
+  sourceRecordId      String                      @map("source_record_id") @db.Uuid
+
+  classification      StockTransferClassification
+  quantity            Decimal                     @map("quantity") @db.Decimal(12, 3)
+  taxableValue        Decimal                     @map("taxable_value") @db.Decimal(14, 2)
+  cgstAmount          Decimal                     @default(0.00) @map("cgst_amount") @db.Decimal(14, 2)
+  sgstAmount          Decimal                     @default(0.00) @map("sgst_amount") @db.Decimal(14, 2)
+  utgstAmount         Decimal                     @default(0.00) @map("utgst_amount") @db.Decimal(14, 2)
+  igstAmount          Decimal                     @default(0.00) @map("igst_amount") @db.Decimal(14, 2)
+  cessAmount          Decimal                     @default(0.00) @map("cess_amount") @db.Decimal(14, 2)
+  totalInvoiceAmount  Decimal                     @map("total_invoice_amount") @db.Decimal(14, 2)
+
+  primaryOutcome      PrimaryOutcome              @map("primary_outcome")
+  createdAt           DateTime                    @default(now()) @map("created_at") @db.Timestamptz
+
+  organization        Organization                @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  importBatch         ImportBatch                 @relation(fields: [organizationId, importBatchId], references: [organizationId, id], onDelete: Cascade)
+  canonicalTransfer   CanonicalStockTransfer      @relation(fields: [organizationId, canonicalTransferId], references: [organizationId, id], onDelete: Restrict)
+  sourceRecord        SourceRecord                @relation(fields: [organizationId, sourceRecordId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@unique([importBatchId, canonicalTransferId])
+  @@map("stock_transfer_processing_results")
+}
+
+// ==========================================
+// RECONCILIATION & AUDIT MODELS
+// ==========================================
+
+model Reconciliation {
+  id                    String                     @id @default(uuid()) @db.Uuid
+  organizationId        String                     @map("organization_id") @db.Uuid
+  importBatchId         String                     @map("import_batch_id") @db.Uuid
+  creditNoteResultId    String                     @unique @map("credit_note_result_id") @db.Uuid
+  invoiceResultId       String                     @map("invoice_result_id") @db.Uuid
+  reconciliationStatus  ReconciliationStatus       @map("reconciliation_status")
+
+  taxableReversed       Decimal                    @map("taxable_reversed") @db.Decimal(14, 2)
+  cgstReversed          Decimal                    @default(0.00) @map("cgst_reversed") @db.Decimal(14, 2)
+  sgstReversed          Decimal                    @default(0.00) @map("sgst_reversed") @db.Decimal(14, 2)
+  utgstReversed         Decimal                    @default(0.00) @map("utgst_reversed") @db.Decimal(14, 2)
+  igstReversed          Decimal                    @default(0.00) @map("igst_reversed") @db.Decimal(14, 2)
+  totalReversed         Decimal                    @map("total_reversed") @db.Decimal(14, 2)
+
+  priorCumulativeTaxable Decimal                   @map("prior_cumulative_taxable") @db.Decimal(14, 2)
+  postCumulativeTaxable  Decimal                   @map("post_cumulative_taxable") @db.Decimal(14, 2)
+  appliedAt             DateTime                   @default(now()) @map("applied_at") @db.Timestamptz
+
+  organization          Organization               @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  importBatch           ImportBatch                @relation(fields: [organizationId, importBatchId], references: [organizationId, id], onDelete: Cascade)
+  creditNoteResult      CreditNoteProcessingResult @relation(fields: [organizationId, creditNoteResultId], references: [organizationId, id], onDelete: Restrict)
+  invoiceResult         InvoiceProcessingResult    @relation(fields: [organizationId, invoiceResultId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, creditNoteResultId])
+  @@index([organizationId, invoiceResultId])
+  @@map("reconciliations")
+}
+
+model ValidationIssue {
+  id              String        @id @default(uuid()) @db.Uuid
+  organizationId  String        @map("organization_id") @db.Uuid
+  importBatchId   String        @map("import_batch_id") @db.Uuid
+  sourceRecordId  String?       @map("source_record_id") @db.Uuid
+  code            String        @db.VarChar(50)
+  severity        IssueSeverity
+  field           String?       @db.VarChar(100)
+  message         String        @db.Text
+  suggestedAction String?       @map("suggested_action") @db.Text
+  documentId      String?       @map("document_id") @db.VarChar(100)
+  sourceReport    String        @map("source_report") @db.VarChar(255)
+  sourceRowNumber Int           @map("source_row_number")
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz
+
+  organization    Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  importBatch     ImportBatch   @relation(fields: [organizationId, importBatchId], references: [organizationId, id], onDelete: Cascade)
+  sourceRecord    SourceRecord? @relation(fields: [organizationId, sourceRecordId], references: [organizationId, id], onDelete: Restrict)
+
+  @@index([organizationId, importBatchId, severity])
+  @@index([code])
+  @@map("validation_issues")
+}
+
+model ProcessingMetrics {
+  id                       String       @id @default(uuid()) @db.Uuid
+  organizationId           String       @map("organization_id") @db.Uuid
+  importBatchId            String       @unique @map("import_batch_id") @db.Uuid
+  durationMs               Int          @map("duration_ms")
+  recordsPerSecond         Int          @map("records_per_second")
+  startMemoryHeapUsedMB    Int          @map("start_memory_heap_used_mb")
+  peakMemoryHeapUsedMB     Int          @map("peak_memory_heap_used_mb")
+  totalRecordsIngested     Int          @map("total_records_ingested")
+  
+  validOutcomes            Int          @map("valid_outcomes")
+  warningOutcomes          Int          @map("warning_outcomes")
+  reviewOutcomes           Int          @map("review_outcomes")
+  errorOutcomes            Int          @map("error_outcomes")
+  zeroDataLossVerified     Boolean      @map("zero_data_loss_verified")
+
+  aggregateTaxableTurnover Decimal      @map("aggregate_taxable_turnover") @db.Decimal(16, 2)
+  aggregateTaxCollected    Decimal      @map("aggregate_tax_collected") @db.Decimal(16, 2)
+  aggregateTaxReversed     Decimal      @map("aggregate_tax_reversed") @db.Decimal(16, 2)
+
+  totalCreditNotes         Int          @map("total_credit_notes")
+  matchedFull              Int          @map("matched_full")
+  matchedPartial           Int          @map("matched_partial")
+  unmatchedOrphan          Int          @map("unmatched_orphan")
+  ambiguousMatches         Int          @map("ambiguous_matches")
+  valueExceeded            Int          @map("value_exceeded")
+  jurisdictionMismatch     Int          @map("jurisdiction_mismatch")
+  matchedB2B               Int          @map("matched_b2b")
+  matchedB2C               Int          @map("matched_b2c")
+
+  createdAt                DateTime     @default(now()) @map("created_at") @db.Timestamptz
+
+  organization             Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  importBatch              ImportBatch  @relation(fields: [organizationId, importBatchId], references: [organizationId, id], onDelete: Cascade)
+
+  @@unique([organizationId, importBatchId])
+  @@map("processing_metrics")
+}
+
+// ==========================================
+// ASYNCHRONOUS JOB & OUTBOX MODELS (PHASE 4.1)
+// ==========================================
+
+model OutboxEvent {
+  id              String        @id @default(uuid()) @db.Uuid
+  organizationId  String        @map("organization_id") @db.Uuid
+  eventType       String        @map("event_type") @db.VarChar(64)
+  payload         Json          @db.JsonB
+  status          OutboxStatus  @default(PENDING)
+  claimedBy       String?       @map("claimed_by") @db.VarChar(128)
+  leaseExpiresAt  DateTime?     @map("lease_expires_at") @db.Timestamptz
+  publishedAt     DateTime?     @map("published_at") @db.Timestamptz
+  attempts        Int           @default(0)
+  lastError       String?       @map("last_error") @db.Text
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization    Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@index([status, leaseExpiresAt, createdAt], name: "idx_outbox_claim")
+  @@index([organizationId], name: "idx_outbox_org")
+  @@map("outbox_events")
+}
+
+model ProcessingJob {
+  id                  String               @id @default(uuid()) @db.Uuid
+  organizationId      String               @map("organization_id") @db.Uuid
+  importBatchId       String               @map("import_batch_id") @db.Uuid
+  jobType             String               @default("BATCH_PROCESSING") @map("job_type") @db.VarChar(64)
+  status              JobStatus            @default(QUEUED)
+  executionCheckpoint ExecutionCheckpoint  @default(STAGING) @map("execution_checkpoint")
+  attempts            Int                  @default(0)
+  maxAttempts         Int                  @default(3) @map("max_attempts")
+  bullmqJobId         String?              @map("bullmq_job_id") @db.VarChar(128)
+  executionMode       BatchExecutionMode   @default(INGESTION) @map("execution_mode")
+  startedAt           DateTime?            @map("started_at") @db.Timestamptz
+  completedAt         DateTime?            @map("completed_at") @db.Timestamptz
+  failedAt            DateTime?            @map("failed_at") @db.Timestamptz
+  lastError           String?              @map("last_error") @db.Text
+  errorStack          String?              @map("error_stack") @db.Text
+  metadata            Json?                @db.JsonB
+  createdAt           DateTime             @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt           DateTime             @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization        Organization         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  importBatch         ImportBatch          @relation(fields: [organizationId, importBatchId], references: [organizationId, id], onDelete: Restrict)
+
+  @@index([organizationId, status], name: "idx_jobs_org_status")
+  @@index([importBatchId], name: "idx_jobs_batch")
+  @@index([bullmqJobId], name: "idx_jobs_bullmq_id")
+  @@map("processing_jobs")
+}
+
+// ==========================================
+// USER IDENTITY & AUTHENTICATION (PHASE 4.2.2)
+// ==========================================
+
+model User {
+  id               String           @id @default(uuid()) @db.Uuid
+  email            String           @db.VarChar(255)
+  normalizedEmail  String           @unique @map("normalized_email") @db.VarChar(255)
+  passwordHash     String           @map("password_hash") @db.VarChar(255)
+  status           UserStatus       @default(ACTIVE)
+  emailVerifiedAt  DateTime?        @map("email_verified_at") @db.Timestamptz
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+
+  refreshSessions  RefreshSession[]
+  memberships      OrganizationMembership[]
+  sentInvitations  OrganizationInvitation[]
+
+  @@index([status], name: "idx_users_status")
+  @@map("users")
+}
+
+model RefreshSession {
+  id                  String     @id @default(uuid()) @db.Uuid
+  userId              String     @map("user_id") @db.Uuid
+  tokenHash           String     @unique @map("token_hash") @db.VarChar(64)
+  tokenFamilyId       String     @map("token_family_id") @db.Uuid
+  expiresAt           DateTime   @map("expires_at") @db.Timestamptz
+  revokedAt           DateTime?  @map("revoked_at") @db.Timestamptz
+  replacedBySessionId String?    @map("replaced_by_session_id") @db.Uuid
+  userAgent           String?    @map("user_agent") @db.VarChar(500)
+  ipAddress           String?    @map("ip_address") @db.VarChar(45)
+  lastUsedAt          DateTime?  @map("last_used_at") @db.Timestamptz
+  createdAt           DateTime   @default(now()) @map("created_at") @db.Timestamptz
+
+  user                User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tokenFamilyId], name: "idx_refresh_sessions_family")
+  @@index([userId, expiresAt], name: "idx_refresh_sessions_user_exp")
+  @@map("refresh_sessions")
+}
+
+// ==========================================
+// ORGANIZATION MEMBERSHIP & RBAC (PHASE 4.2.3)
+// ==========================================
+
+model OrganizationMembership {
+  id             String           @id @default(uuid()) @db.Uuid
+  organizationId String           @map("organization_id") @db.Uuid
+  userId         String           @map("user_id") @db.Uuid
+  role           MembershipRole   @default(MEMBER)
+  status         MembershipStatus @default(ACTIVE)
+  joinedAt       DateTime         @default(now()) @map("joined_at") @db.Timestamptz
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz
+
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId], name: "uq_org_membership_user")
+  @@index([userId, status], name: "idx_memberships_user_status")
+  @@index([organizationId, role], name: "idx_memberships_org_role")
+  @@index([organizationId, status], name: "idx_memberships_org_status")
+  @@map("organization_memberships")
+}
+
+model OrganizationInvitation {
+  id              String         @id @default(uuid()) @db.Uuid
+  organizationId  String         @map("organization_id") @db.Uuid
+  email           String         @db.VarChar(255)
+  normalizedEmail String         @map("normalized_email") @db.VarChar(255)
+  role            MembershipRole @default(MEMBER)
+  tokenHash       String         @unique @map("token_hash") @db.VarChar(64)
+  invitedByUserId String?        @map("invited_by_user_id") @db.Uuid
+  expiresAt       DateTime       @map("expires_at") @db.Timestamptz
+  acceptedAt      DateTime?      @map("accepted_at") @db.Timestamptz
+  revokedAt       DateTime?      @map("revoked_at") @db.Timestamptz
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz
+
+  organization    Organization   @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  invitedByUser   User?          @relation(fields: [invitedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, normalizedEmail], name: "idx_invitations_org_email")
+  @@index([organizationId, expiresAt], name: "idx_invitations_org_exp")
+  @@map("organization_invitations")
+}

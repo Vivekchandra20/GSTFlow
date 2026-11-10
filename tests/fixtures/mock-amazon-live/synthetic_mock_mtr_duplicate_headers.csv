@@ -1,0 +1,2 @@
+Seller GSTIN,Invoice Number,Invoice Date,Transaction Type,Order ID,Customer Bill to GSTIN,Buyer GSTIN,Principal Amount Basis,Total Tax Amount,Invoice Amount
+29AABCS1429B1ZB,INV-DUP-01,2026-10-10,Shipment,402-1111111-1111111,27AABCS1429B1ZB,27AABCS1429B1ZB,1000.00,180.00,1180.00

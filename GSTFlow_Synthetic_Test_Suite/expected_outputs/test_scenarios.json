@@ -1,0 +1,92 @@
+[
+  {
+    "test_id": "GST-001",
+    "scenario": "Intrastate taxable B2B invoice",
+    "expected": "CGST and SGST apply; IGST is zero",
+    "severity": "valid"
+  },
+  {
+    "test_id": "GST-002",
+    "scenario": "Interstate taxable B2B invoice",
+    "expected": "IGST applies; CGST and SGST are zero",
+    "severity": "valid"
+  },
+  {
+    "test_id": "GST-003",
+    "scenario": "B2C invoice without recipient GSTIN",
+    "expected": "Route to B2C workflow; do not invent recipient GSTIN",
+    "severity": "valid"
+  },
+  {
+    "test_id": "GST-004",
+    "scenario": "B2B transaction without recipient GSTIN",
+    "expected": "Flag for review; do not silently classify as valid B2B",
+    "severity": "error"
+  },
+  {
+    "test_id": "GST-005",
+    "scenario": "Duplicate invoice number for same seller and financial year",
+    "expected": "Flag duplicate; uniqueness scope must follow applicable GST rules and business configuration",
+    "severity": "error"
+  },
+  {
+    "test_id": "GST-006",
+    "scenario": "Negative taxable value on ordinary sales invoice",
+    "expected": "Flag; negative adjustments should be represented with appropriate credit/debit note semantics",
+    "severity": "error"
+  },
+  {
+    "test_id": "GST-007",
+    "scenario": "Tax amount differs from rounded taxable value \u00d7 rate",
+    "expected": "Flag calculation mismatch using configured rounding policy",
+    "severity": "error"
+  },
+  {
+    "test_id": "GST-008",
+    "scenario": "Missing HSN/SAC",
+    "expected": "Flag according to applicable reporting requirements and taxpayer category",
+    "severity": "warning"
+  },
+  {
+    "test_id": "GST-009",
+    "scenario": "Interstate transaction with CGST and SGST",
+    "expected": "Flag place-of-supply/tax-type inconsistency for review",
+    "severity": "error"
+  },
+  {
+    "test_id": "GST-010",
+    "scenario": "Refund record without original invoice reference",
+    "expected": "Send to reconciliation review; do not fabricate reference",
+    "severity": "warning"
+  },
+  {
+    "test_id": "GST-011",
+    "scenario": "Same order contains multiple SKU lines",
+    "expected": "Preserve line items; group by invoice only when invoice identity supports it",
+    "severity": "valid"
+  },
+  {
+    "test_id": "GST-012",
+    "scenario": "Cancelled order with no invoice",
+    "expected": "Do not create taxable outward supply solely from order record",
+    "severity": "valid"
+  },
+  {
+    "test_id": "GST-013",
+    "scenario": "Stock transfer between distinct GST registrations",
+    "expected": "Route to stock-transfer workflow; do not treat as customer sale",
+    "severity": "review"
+  },
+  {
+    "test_id": "GST-014",
+    "scenario": "Credit note partially reverses original taxable value",
+    "expected": "Preserve original invoice link and proportional tax adjustment",
+    "severity": "valid"
+  },
+  {
+    "test_id": "GST-015",
+    "scenario": "Tax rate not in configured rate catalogue",
+    "expected": "Flag for human review; do not guess tax rate",
+    "severity": "error"
+  }
+]

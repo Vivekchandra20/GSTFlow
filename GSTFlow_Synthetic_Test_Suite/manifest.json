@@ -1,0 +1,32 @@
+{
+  "suite_name": "GSTFlow Synthetic Marketplace GST Test Suite",
+  "version": "1.0.0",
+  "generated_on": "2026-11-07",
+  "synthetic_only": true,
+  "important_notice": "All rows and identifiers are fabricated for software testing. They are not Amazon exports, real taxpayer data, real GSTIN registrations, tax advice, or filing-ready returns.",
+  "files": {
+    "amazon/synthetic_amazon_mtr_b2b.csv": {
+      "rows": 5000,
+      "purpose": "Synthetic invoice-level B2B-like test records"
+    },
+    "amazon/synthetic_amazon_mtr_b2c.csv": {
+      "rows": 10000,
+      "purpose": "Synthetic invoice-level B2C-like test records"
+    },
+    "amazon/synthetic_amazon_stock_transfer.csv": {
+      "rows": 1000,
+      "purpose": "Synthetic stock-transfer test records"
+    },
+    "amazon/synthetic_amazon_credit_notes.csv": {
+      "rows": 2000,
+      "purpose": "Synthetic credit-note records linked to synthetic invoices"
+    },
+    "edge_cases/synthetic_invalid_transactions.csv": {
+      "rows": 500,
+      "purpose": "Controlled invalid data with expected issue labels"
+    }
+  },
+  "schema_caveat": "Column names are a GSTFlow canonical test schema inspired by publicly described marketplace/MTR fields. They are not claimed to match Amazon's exact downloadable MTR CSV headers.",
+  "tax_caveat": "Tax arithmetic is internally generated for test scenarios. Tax rates and statutory treatment must be confirmed against current law and a GST professional before production use.",
+  "gstin_caveat": "GSTIN-like values are synthetic format-shaped identifiers only. Registration status and checksum validity are not asserted."
+}
